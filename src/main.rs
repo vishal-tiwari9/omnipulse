@@ -4,6 +4,7 @@ use sha2::Sha256;
 use std::time::{SystemTime,UNIX_EPOCH};
 use dotenvy::dotenv;
 use std::env;
+mod ws_client;
 use reqwest::header::{HeaderMap,HeaderValue};
 
 
@@ -63,6 +64,10 @@ async fn main()-> Result<(),Box<dyn std::error::Error>>{
     println!("Status:{}",res.status());
     let text = res.text().await?;
     println!("Response:{}",text);
+println!("TEsting websocket");
+ws_client::start_websocket().await;
+
+
     Ok(())
 
 
