@@ -11,7 +11,7 @@ pub enum MarketEvent{
 #[derive(Debug,Clone)]
 pub struct DesiredOrder{
     pub side:String, // buy or sell
-    pub outcome String, // yes or no
+    pub outcome: String, // yes or no
     pub price:i64,
     pub size:i64,
 

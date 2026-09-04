@@ -31,7 +31,7 @@ impl MarketState {
                 println!("Round Status Changed! ID :{},Status:{}",market_id,self.market_status);
             }
             MarketEvent::UserInventoryUpdate{
-                availabe_balance,current_positions
+                available_balance,current_positions
             }=> {
                 self.available_balance=available_balance;
             }
