@@ -147,9 +147,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut live_orders: Vec<String> = Vec::new();
         let mut last_quoted_market: Option<i64> = None;
-        // Throttle: only re-quote if price moved ≥ 1¢ (100 raw ticks in 10^-8 units)
-        let mut last_quoted_price: f64 = 0.0;
-        const REPRICE_THRESHOLD: f64 = 100_000_000.0; // 0.01 USD = 1 cent in 10^-8 units
+        let mut last_quoted_ticks: Option<(i64, i64)> = None;
+        let mut last_log_time = SystemTime::now();
 
         while let Some(event) = rx.recv().await {
             // ── Detect market change ─────────────────────────────────────────
@@ -162,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // If market changed, flush live_orders (old market's orders are already gone)
             if curr_market != prev_market {
                 live_orders.clear();
-                last_quoted_price = 0.0;
+                last_quoted_ticks = None;
                 last_quoted_market = None;
             }
 
@@ -173,27 +172,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(id) => id,
                 None => { 
                     if !live_orders.is_empty() {
-                        // Market gone — cancel whatever we have
                         cancel_batch(&order_http, &api_key_brain, &api_secret_brain, &live_orders).await;
                         live_orders.clear();
+                        last_quoted_ticks = None;
                     }
                     continue;
                 }
             };
 
-            // ── Throttle: skip if market is frozen or price barely moved ──────
             if bot_state.market_status != "trading" {
                 if !live_orders.is_empty() {
                     cancel_batch(&order_http, &api_key_brain, &api_secret_brain, &live_orders).await;
                     live_orders.clear();
+                    last_quoted_ticks = None;
                 }
                 continue;
             }
-
-            // Only re-quote if this is a new market OR price moved ≥ 1¢
-            let price_moved = (spot - last_quoted_price).abs() >= REPRICE_THRESHOLD;
-            let is_new_market = Some(market_id) != last_quoted_market;
-            if !price_moved && !is_new_market { continue; }
 
             // ── Strategy ──────────────────────────────────────────────────────
             match strategy::decide(&bot_state) {
@@ -203,12 +197,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if !live_orders.is_empty() {
                         cancel_batch(&order_http, &api_key_brain, &api_secret_brain, &live_orders).await;
                         live_orders.clear();
+                        last_quoted_ticks = None;
                     }
-                    last_quoted_price = spot;
                     last_quoted_market = Some(market_id);
                 }
 
                 strategy::Decision::Quote(desired) => {
+                    let mut current_yes = 0;
+                    let mut current_no = 0;
+                    for o in &desired {
+                        if o.outcome == "yes" { current_yes = o.tick; }
+                        if o.outcome == "no"  { current_no = o.tick;  }
+                    }
+
+                    let is_new_market = Some(market_id) != last_quoted_market;
+                    let ticks_changed = Some((current_yes, current_no)) != last_quoted_ticks;
+                    
+                    // Throttle logging to every 5s if ticks haven't changed
+                    if !ticks_changed && !is_new_market {
+                        if last_log_time.elapsed().unwrap_or(Duration::from_secs(10)).as_secs() > 5 {
+                            // Optionally log a heartbeat
+                            last_log_time = SystemTime::now();
+                        }
+                        continue;
+                    }
+
                     // Cancel old quotes
                     if !live_orders.is_empty() {
                         cancel_batch(&order_http, &api_key_brain, &api_secret_brain, &live_orders).await;
@@ -261,8 +274,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
 
-                    last_quoted_price   = spot;
+                    last_quoted_ticks   = Some((current_yes, current_no));
                     last_quoted_market  = Some(market_id);
+                    last_log_time       = SystemTime::now();
                 }
             }
         }
